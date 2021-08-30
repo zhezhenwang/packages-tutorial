@@ -1,0 +1,121 @@
+---
+title: "pathfindR"
+output: html_document
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd('~/Documents/desktop-tutorial/Sonja/SAN_GSE30936179/pathway/')
+```
+
+## R Markdown
+```{r install, message=FALSE,eval=FALSE}
+# to install
+BiocManager::install('pathfindR')
+```
+
+Java installation required
+if see error:
+"error: Java version detected but couldn't parse version from No Java runtime present, requesting install."
+open terminal and paste the following:
+export JAVA_HOME=/Library/Internet\ Plug-Ins/JavaAppletPlugin.plugin/Contents/Home
+
+```{r,message=FALSE}
+# https://cran.r-project.org/web/packages/pathfindR/vignettes/intro_vignette.html
+library(pathfindR)
+```
+
+skip the following because these files are downloaded and attached 
+```{r skip, eval=FALSE}
+#from: https://cran.r-project.org/web/packages/pathfindR/vignettes/non_hs_analysis.html
+gsets_list <- get_gene_sets_list(source = "KEGG",
+                                 org_code = "mmu")
+mmu_kegg_genes <- gsets_list$gene_sets
+mmu_kegg_descriptions <- gsets_list$descriptions
+## Downloading the STRING PIN file to tempdir
+url <- "https://stringdb-static.org/download/protein.links.v11.0/10090.protein.links.v11.0.txt.gz"
+path2file <- file.path(tempdir(check = TRUE), "STRING.txt.gz")
+download.file(url, path2file)
+
+## read STRING pin file
+mmu_string_df <- read.table(path2file, header = TRUE)
+
+## filter using combined_score cut-off value of 800
+mmu_string_df <- mmu_string_df[mmu_string_df$combined_score >= 800, ]
+
+## fix ids
+mmu_string_pin <- data.frame(Interactor_A = sub("^10090\\.", "", mmu_string_df$protein1),
+                             Interactor_B = sub("^10090\\.", "", mmu_string_df$protein2))
+head(mmu_string_pin, 2)
+library(biomaRt)
+
+mmu_ensembl <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+converted <- getBM(attributes = c("ensembl_peptide_id", "mgi_symbol"),
+                   filters = "ensembl_peptide_id",
+                   values = unique(unlist(mmu_string_pin)),
+                   mart = mmu_ensembl)
+mmu_string_pin$Interactor_A <- converted$mgi_symbol[match(mmu_string_pin$Interactor_A, converted$ensembl_peptide_id)]
+mmu_string_pin$Interactor_B <- converted$mgi_symbol[match(mmu_string_pin$Interactor_B, converted$ensembl_peptide_id)]
+mmu_string_pin <- mmu_string_pin[!is.na(mmu_string_pin$Interactor_A) & !is.na(mmu_string_pin$Interactor_B), ]
+mmu_string_pin <- mmu_string_pin[mmu_string_pin$Interactor_A != "" & mmu_string_pin$Interactor_B != "", ]
+
+head(mmu_string_pin, 2)
+
+# remove self interactions
+self_intr_cond <- mmu_string_pin$Interactor_A == mmu_string_pin$Interactor_B
+mmu_string_pin <- mmu_string_pin[!self_intr_cond, ]
+
+# remove duplicated inteactions (including symmetric ones)
+mmu_string_pin <- unique(t(apply(mmu_string_pin, 1, sort))) # this will return a matrix object
+
+mmu_string_pin <- data.frame(A = mmu_string_pin[, 1],
+                             pp = "pp",
+                             B = mmu_string_pin[, 2])
+
+path2SIF <- file.path('../..some directory', "mmusculusPIN.sif")
+write.table(mmu_string_pin,
+            file = path2SIF,
+            col.names = FALSE,
+            row.names = FALSE,
+            sep = "\t",
+            quote = FALSE)
+path2SIF <- normalizePath(path2SIF)
+
+```
+
+read in files and run_pathfindR
+```{r,message=FALSE,warning=FALSE, results="hide"}
+mmu_kegg_genes <- readRDS("mmu_kegg_genes.RDS")
+mmu_kegg_descriptions <- readRDS("mmu_kegg_descriptions.RDS")
+
+path2SIF ='~/Documents/desktop-tutorial/Sonja/SAN_GSE30936179/pathway/mmusculusPIN.sif'
+path2SIF = normalizePath(path2SIF)
+
+load("/Users/zhezhenwang/Documents/desktop-tutorial/Sonja/frCarlos/HTseq_DESeq_LA_padj0.05LFC0.5.rData")
+de = subset(resHTdata,abs(log2FoldChange)>0.5 & padj<0.05)
+# for test purpose only
+de = de[1:500,]
+
+# for human pathway: output_df <- run_pathfindR(de)
+output_df <- run_pathfindR(de[,c('gene_id','log2FoldChange','padj')],convert2alias = FALSE,
+                             gene_sets = "Custom",custom_genes = mmu_kegg_genes,
+                             custom_descriptions = mmu_kegg_descriptions,pin_name_path = path2SIF)
+```
+```{r}
+head(output_df)
+```
+
+plotting barplot for signaling pathways
+```{r plot}
+justPlot = function(output_df,color = 'gray'){
+  sig = output_df[grep('signaling',output_df$Term_Description),c('Term_Description','highest_p')]
+  #row.names(sig) = sig$Term_Description
+  sig$log10p = -log10(sig$highest_p)
+  sig = sig[order(sig$log10p),]
+  par(mar=c(3,15,2,2))
+  barplot(sig$log10p,horiz=T,names.arg=sig$Term_Description,las=2,cex.names =0.5,col = color,xlab = '-log10(p-value)')
+}
+justPlot(output_df)
+```
+
